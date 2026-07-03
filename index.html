@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="CourseHub – Upload and watch your video courses with a Udemy-style interface and YouTube-style watch history." />
+  <title>CourseHub – Learn Anything</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── Navbar ── -->
+    <nav id="navbar">
+      <div class="nav-container">
+        <a href="#home" class="nav-logo" aria-label="CourseHub Home">
+          <div class="logo-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="currentColor"/>
+              <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+              <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+            </svg>
+          </div>
+          <span class="logo-text">CourseHub</span>
+        </a>
+
+        <div class="nav-links" id="nav-links">
+          <a href="#home" class="nav-link" data-page="home" id="nav-home">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            Home
+          </a>
+          <a href="#history" class="nav-link" data-page="history" id="nav-history">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            History
+          </a>
+          <a href="#upload" class="nav-link nav-cta" data-page="upload" id="nav-upload">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Upload Course
+          </a>
+        </div>
+
+        <button class="hamburger" id="hamburger-btn" aria-label="Toggle menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+
+      <div class="mobile-nav" id="mobile-nav">
+        <a href="#home" class="mobile-nav-link" data-page="home">Home</a>
+        <a href="#history" class="mobile-nav-link" data-page="history">History</a>
+        <a href="#upload" class="mobile-nav-link" data-page="upload">Upload Course</a>
+      </div>
+    </nav>
+
+    <!-- ── Page Content ── -->
+    <main id="main-content" role="main"></main>
+
+    <!-- ── Toast Notifications ── -->
+    <div id="toast-container" aria-live="polite"></div>
+
+    <!-- ── Upload Loading Overlay ── -->
+    <div id="upload-overlay" class="upload-overlay hidden" aria-hidden="true">
+      <div class="upload-overlay-box">
+        <div class="spinner"></div>
+        <p class="upload-overlay-title">Saving Course…</p>
+        <p class="upload-overlay-sub" id="upload-overlay-msg">Processing videos…</p>
+        <div class="upload-overlay-bar">
+          <div class="upload-overlay-fill" id="upload-overlay-fill"></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- #app -->
+
+  <script src="app.js"></script>
+</body>
+</html>
