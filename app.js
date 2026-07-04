@@ -58,6 +58,221 @@ const VideoDB = (() => {
 })();
 
 /* ============================================================
+   1b. GOOGLE DRIVE — auth + upload/download
+   ============================================================ */
+const GDRIVE_API    = 'https://www.googleapis.com/drive/v3';
+const GDRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+
+const DriveAuth = {
+  getClientId()      { return localStorage.getItem('ch_gdrive_cid') || ''; },
+  setClientId(id)    { localStorage.setItem('ch_gdrive_cid', id.trim()); },
+
+  _tokenData()       { try { return JSON.parse(localStorage.getItem('ch_gdrive_tok') || 'null'); } catch { return null; } },
+  getToken()         { const d = this._tokenData(); return (d && Date.now() < d.exp - 120000) ? d.tok : null; },
+  saveToken(t, exp)  { localStorage.setItem('ch_gdrive_tok', JSON.stringify({ tok: t, exp: Date.now() + exp * 1000 })); },
+  clearToken()       { localStorage.removeItem('ch_gdrive_tok'); localStorage.removeItem('ch_gdrive_folder'); _driveFolderId = null; },
+  isConnected()      { return !!this.getToken(); },
+
+  async requestToken() {
+    const cid = this.getClientId();
+    if (!cid) throw new Error('No Client ID set. Open ⚙️ Settings first.');
+    if (typeof google === 'undefined' || !google?.accounts?.oauth2)
+      throw new Error('Google Identity Services not loaded. Make sure you opened the app via http://localhost and not file://');
+    return new Promise((res, rej) => {
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: cid,
+        scope: 'https://www.googleapis.com/auth/drive.file',
+        callback: r => {
+          if (r.error) { rej(new Error(r.error_description || r.error)); return; }
+          this.saveToken(r.access_token, r.expires_in || 3600);
+          res(r.access_token);
+        }
+      });
+      client.requestAccessToken({ prompt: '' });
+    });
+  },
+
+  async getValidToken() {
+    return this.getToken() || this.requestToken();
+  },
+
+  async disconnect() {
+    const t = this.getToken();
+    if (t && typeof google !== 'undefined') google.accounts.oauth2.revoke(t, () => {});
+    this.clearToken();
+    updateDriveNavBadge();
+  }
+};
+
+let _driveFolderId = null;
+
+const DriveStorage = {
+  async getFolder(token) {
+    if (_driveFolderId) return _driveFolderId;
+    const cached = localStorage.getItem('ch_gdrive_folder');
+    if (cached) { _driveFolderId = cached; return _driveFolderId; }
+
+    const q   = encodeURIComponent("name='CourseHub' and mimeType='application/vnd.google-apps.folder' and trashed=false");
+    const res = await fetch(`${GDRIVE_API}/files?q=${q}&fields=files(id)&spaces=drive`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (data.files?.length) {
+      _driveFolderId = data.files[0].id;
+    } else {
+      const cr = await fetch(`${GDRIVE_API}/files`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'CourseHub', mimeType: 'application/vnd.google-apps.folder' })
+      });
+      _driveFolderId = (await cr.json()).id;
+    }
+    localStorage.setItem('ch_gdrive_folder', _driveFolderId);
+    return _driveFolderId;
+  },
+
+  async upload(file, token, onProgress) {
+    const folderId  = await this.getFolder(token);
+    const mimeType  = file.type || 'application/octet-stream';
+    if (file.size <= 5 * 1024 * 1024) return this._simple(file, mimeType, folderId, token);
+    return this._resumable(file, mimeType, folderId, token, onProgress);
+  },
+
+  async _simple(file, mime, folderId, token) {
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify({ name: file.name, parents: [folderId] })], { type: 'application/json' }));
+    form.append('file', file);
+    const res = await fetch(`${GDRIVE_UPLOAD}/files?uploadType=multipart&fields=id`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form
+    });
+    if (!res.ok) throw new Error(`Drive upload ${res.status}: ${await res.text()}`);
+    return (await res.json()).id;
+  },
+
+  async _resumable(file, mime, folderId, token, onProgress) {
+    const init = await fetch(`${GDRIVE_UPLOAD}/files?uploadType=resumable&fields=id`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+        'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': file.size
+      },
+      body: JSON.stringify({ name: file.name, parents: [folderId] })
+    });
+    if (!init.ok) throw new Error(`Drive init ${init.status}`);
+    const uploadUrl = init.headers.get('location');
+
+    const CHUNK = 8 * 1024 * 1024;
+    let offset = 0;
+    while (offset < file.size) {
+      const end   = Math.min(offset + CHUNK, file.size);
+      const res   = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Range': `bytes ${offset}-${end-1}/${file.size}`, 'Content-Type': mime },
+        body: file.slice(offset, end)
+      });
+      if (res.status === 200 || res.status === 201) { onProgress?.(1); return (await res.json()).id; }
+      if (res.status === 308) {
+        const rng = res.headers.get('range');
+        offset = rng ? parseInt(rng.split('-')[1]) + 1 : end;
+        onProgress?.(offset / file.size);
+      } else throw new Error(`Drive chunk ${res.status} at ${offset}`);
+    }
+    throw new Error('Resumable upload ended without 200/201');
+  },
+
+  async getBlob(driveFileId, token) {
+    const res = await fetch(`${GDRIVE_API}/files/${driveFileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error(`Drive download ${res.status}`);
+    return res.blob();
+  },
+
+  async deleteFile(driveFileId, token) {
+    await fetch(`${GDRIVE_API}/files/${driveFileId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => {});
+  }
+};
+
+/* ── Nav badge helper (updated after connect/disconnect) ── */
+function updateDriveNavBadge() {
+  const btn = document.getElementById('nav-drive-btn');
+  if (!btn) return;
+  const connected = DriveAuth.isConnected();
+  btn.title = connected ? 'Google Drive connected — click to manage' : 'Connect Google Drive';
+  btn.querySelector('.drive-dot')?.classList.toggle('drive-dot-on', connected);
+}
+
+/* ============================================================
+   1c. DRIVE METADATA SYNC
+   Stores course list as coursehub_courses.json in Google Drive
+   so ALL devices share the same course library.
+   ============================================================ */
+const DriveMeta = {
+  FILE_NAME: 'coursehub_courses.json',
+  _fileId:   null,
+
+  async _findFileId(token) {
+    if (this._fileId) return this._fileId;
+    const cached = localStorage.getItem('ch_gdrive_meta_id');
+    if (cached) { this._fileId = cached; return this._fileId; }
+
+    const q   = encodeURIComponent(`name='${this.FILE_NAME}' and trashed=false`);
+    const res = await fetch(`${GDRIVE_API}/files?q=${q}&fields=files(id)&spaces=drive`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (data.files?.length) {
+      this._fileId = data.files[0].id;
+      localStorage.setItem('ch_gdrive_meta_id', this._fileId);
+    }
+    return this._fileId;
+  },
+
+  /* Pull latest courses.json from Drive → returns array or null */
+  async load(token) {
+    try {
+      const fid = await this._findFileId(token);
+      if (!fid) return null;
+      const res = await fetch(`${GDRIVE_API}/files/${fid}?alt=media`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch { return null; }
+  },
+
+  /* Push courses array to Drive (create or update courses.json) */
+  async save(token, courses) {
+    const folderId = await DriveStorage.getFolder(token);
+    const fileId   = await this._findFileId(token);
+    const blob     = new Blob([JSON.stringify(courses)], { type: 'application/json' });
+    const form     = new FormData();
+    const meta     = fileId ? {} : { name: this.FILE_NAME, parents: [folderId] };
+    form.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
+    form.append('file', blob);
+
+    const res = await fetch(
+      fileId
+        ? `${GDRIVE_UPLOAD}/files/${fileId}?uploadType=multipart&fields=id`
+        : `${GDRIVE_UPLOAD}/files?uploadType=multipart&fields=id`,
+      { method: fileId ? 'PATCH' : 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form }
+    );
+    if (!res.ok) throw new Error(`Meta save ${res.status}`);
+    if (!fileId) {
+      this._fileId = (await res.json()).id;
+      localStorage.setItem('ch_gdrive_meta_id', this._fileId);
+    }
+  }
+};
+
+/* Service Worker promise — resolves to the active SW for Drive streaming */
+let _swPromise = null;
+
+/* ============================================================
    2. LOCAL STORAGE — course metadata, progress, history
    ============================================================ */
 const Store = {
@@ -65,15 +280,31 @@ const Store = {
     try { return JSON.parse(localStorage.getItem('ch_courses') || '[]'); }
     catch { return []; }
   },
-  saveCourses(arr) { localStorage.setItem('ch_courses', JSON.stringify(arr)); },
+  saveCourses(arr) {
+    localStorage.setItem('ch_courses', JSON.stringify(arr));
+    // Background-sync to Drive so other devices see the change
+    if (DriveAuth.isConnected()) {
+      DriveAuth.getValidToken()
+        .then(tok => DriveMeta.save(tok, arr))
+        .catch(e  => console.warn('[DriveMeta] sync failed:', e));
+    }
+  },
   getCourse(id)    { return this.getCourses().find(c => c.id === id) || null; },
   addCourse(c)     { const arr = this.getCourses(); arr.unshift(c); this.saveCourses(arr); },
   async deleteCourse(id) {
     const c = this.getCourse(id);
     if (c) {
+      const driveToken = DriveAuth.isConnected() ? await DriveAuth.getValidToken().catch(() => null) : null;
       for (const l of c.lessons) {
-        await VideoDB.remove(l.videoId).catch(() => {});
-        if (l.pdfId) await VideoDB.remove(l.pdfId).catch(() => {});
+        if (l.storageMode === 'gdrive') {
+          if (driveToken) {
+            await DriveStorage.deleteFile(l.driveVideoId, driveToken).catch(() => {});
+            if (l.drivePdfId) await DriveStorage.deleteFile(l.drivePdfId, driveToken).catch(() => {});
+          }
+        } else {
+          await VideoDB.remove(l.videoId).catch(() => {});
+          if (l.pdfId) await VideoDB.remove(l.pdfId).catch(() => {});
+        }
       }
     }
     this.saveCourses(this.getCourses().filter(c => c.id !== id));
@@ -360,7 +591,68 @@ const Router = {
    ============================================================ */
 const Views = {
 
-  /* ─── HOME ─────────────────────────────────────────────────── */
+  /* ─── GOOGLE DRIVE SETTINGS MODAL ────────────────────────────── */
+  openSettings() {
+    const modal     = document.getElementById('drive-modal');
+    const setup     = document.getElementById('drive-setup-view');
+    const connected = document.getElementById('drive-connected-view');
+    const input     = document.getElementById('drive-client-id-input');
+    const hint      = document.getElementById('drive-input-hint');
+
+    // Show the right panel
+    const isConn = DriveAuth.isConnected();
+    setup.classList.toggle('hidden', isConn);
+    connected.classList.toggle('hidden', !isConn);
+
+    // Pre-fill saved client ID
+    if (input && DriveAuth.getClientId()) input.value = DriveAuth.getClientId();
+
+    modal.classList.remove('hidden');
+    requestAnimationFrame(() => modal.classList.add('drive-modal-visible'));
+
+    function closeModal() {
+      modal.classList.remove('drive-modal-visible');
+      setTimeout(() => modal.classList.add('hidden'), 250);
+    }
+
+    document.getElementById('drive-modal-close').onclick    = closeModal;
+    document.getElementById('btn-drive-modal-close2')?.addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); }, { once: true });
+
+    // Connect button
+    document.getElementById('btn-drive-connect').onclick = async () => {
+      const cid = input.value.trim();
+      if (!cid.includes('.apps.googleusercontent.com')) {
+        hint.textContent = '⚠️ Paste a valid Client ID ending in .apps.googleusercontent.com';
+        hint.style.color = 'var(--danger)';
+        return;
+      }
+      DriveAuth.setClientId(cid);
+      hint.textContent = 'Opening Google sign-in…';
+      hint.style.color = 'var(--text-3)';
+      try {
+        await DriveAuth.requestToken();
+        updateDriveNavBadge();
+        showToast('✅ Google Drive connected! New uploads go to Drive.');
+        setup.classList.add('hidden');
+        connected.classList.remove('hidden');
+        hint.textContent = '';
+      } catch (e) {
+        hint.textContent = '❌ ' + e.message;
+        hint.style.color = 'var(--danger)';
+      }
+    };
+
+    // Disconnect button
+    document.getElementById('btn-drive-disconnect')?.addEventListener('click', async () => {
+      await DriveAuth.disconnect();
+      showToast('Google Drive disconnected. Uploads will save locally.');
+      setup.classList.remove('hidden');
+      connected.classList.add('hidden');
+    });
+  },
+
+  /* ─── HOME ─────────────────────────────────────────────────────── */
   home(main) {
     const courses = Store.getCourses();
     const history = Store.getHistory();
@@ -504,6 +796,23 @@ const Views = {
     <div class="upload-page">
       <h1>📤 Upload a Course</h1>
       <p class="page-sub">Add your videos in order to create a full course. Drag lessons to reorder them.</p>
+
+      <!-- Drive mode banner -->
+      ${DriveAuth.isConnected() ? `
+      <div class="drive-active-banner">
+        <span class="drive-active-icon">
+          <svg width="18" height="18" viewBox="0 0 87.3 78"><path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3L27.5 53H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/><path d="M43.65 25L29.9 1.2c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 00-1.2 4.5h27.5z" fill="#00ac47"/><path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.25z" fill="#ea4335"/><path d="M43.65 25L57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/><path d="M59.8 53H27.5L13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/><path d="M73.4 26.5l-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25 59.8 53h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/></svg>
+        </span>
+        <div>
+          <div class="drive-active-title">☁️ Google Drive is active</div>
+          <div class="drive-active-sub">Videos will be uploaded to your Google Drive — <strong>zero laptop storage</strong> used.</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="Views.openSettings()" type="button">Manage</button>
+      </div>` : `
+      <div class="drive-inactive-banner">
+        <span>💾 Saving to browser storage (local)</span>
+        <button class="btn btn-secondary btn-sm" onclick="Views.openSettings()" type="button">Connect Google Drive</button>
+      </div>`}
 
       <!-- Step 1: Course Info -->
       <div class="form-card">
@@ -887,6 +1196,14 @@ const Views = {
       const overlayFill = document.getElementById('upload-overlay-fill');
       overlay.classList.remove('hidden');
 
+      const useDrive   = DriveAuth.isConnected();
+      let   driveToken = null;
+      if (useDrive) {
+        overlayMsg.textContent = 'Connecting to Google Drive…';
+        try { driveToken = await DriveAuth.getValidToken(); }
+        catch (e) { overlay.classList.add('hidden'); showToast('Drive auth failed: ' + e.message, 'error'); return; }
+      }
+
       try {
         /* Thumbnail */
         let thumbnailDataUrl = '';
@@ -902,37 +1219,53 @@ const Views = {
         /* Save videos + PDFs */
         const savedLessons = [];
         for (let i = 0; i < lessons.length; i++) {
-          const l    = lessons[i];
+          const l      = lessons[i];
           const assets = lessonAssets[l.id];
 
-          overlayMsg.textContent  = `Saving lesson ${i+1} of ${lessons.length}…`;
+          overlayMsg.textContent  = useDrive
+            ? `☁️ Uploading lesson ${i+1} of ${lessons.length} to Google Drive…`
+            : `Saving lesson ${i+1} of ${lessons.length}…`;
           overlayFill.style.width = `${Math.round((i / lessons.length) * 90)}%`;
 
-          await VideoDB.save(l.videoId, assets.video);
+          if (useDrive) {
+            /* ── Google Drive path ── */
+            const driveVideoId = await DriveStorage.upload(assets.video, driveToken, pct => {
+              overlayFill.style.width = `${Math.round(((i + pct * 0.9) / lessons.length) * 90)}%`;
+            });
+            let drivePdfId = null;
+            if (assets.pdf) drivePdfId = await DriveStorage.upload(assets.pdf, driveToken, null);
 
-          let pdfSaved = false;
-          if (assets.pdf) {
-            await VideoDB.save(l.pdfId, assets.pdf);
-            pdfSaved = true;
+            savedLessons.push({
+              id: l.id, title: l.title.trim(), duration: l.duration,
+              storageMode: 'gdrive', driveVideoId, drivePdfId,
+              pdfName: assets.pdf ? l.pdfName : null,
+              // keep placeholder fields so old code doesn't break
+              videoId: l.videoId, pdfId: null
+            });
+          } else {
+            /* ── Local IndexedDB path ── */
+            await VideoDB.save(l.videoId, assets.video);
+            let pdfSaved = false;
+            if (assets.pdf) { await VideoDB.save(l.pdfId, assets.pdf); pdfSaved = true; }
+
+            savedLessons.push({
+              id: l.id, title: l.title.trim(), duration: l.duration,
+              storageMode: 'local', videoId: l.videoId,
+              pdfId:   pdfSaved ? l.pdfId   : null,
+              pdfName: pdfSaved ? l.pdfName : null
+            });
           }
-
-          savedLessons.push({
-            id:       l.id,
-            title:    l.title.trim(),
-            videoId:  l.videoId,
-            pdfId:    pdfSaved ? l.pdfId : null,
-            pdfName:  pdfSaved ? l.pdfName : null,
-            duration: l.duration
-          });
         }
 
         overlayFill.style.width = '100%';
         overlayMsg.textContent  = 'Finalising…';
         await new Promise(r => setTimeout(r, 300));
 
-        Store.addCourse({ id: uid(), title, description: desc, thumbnailDataUrl, createdAt: new Date().toISOString(), lessons: savedLessons });
+        Store.addCourse({ id: uid(), title, description: desc, thumbnailDataUrl,
+          storageMode: useDrive ? 'gdrive' : 'local',
+          createdAt: new Date().toISOString(), lessons: savedLessons });
         overlay.classList.add('hidden');
-        showToast(`"${title}" published! 🎉`);
+        showToast(useDrive ? `"☁️ ${title}" saved to Google Drive! 🎉` : `"${title}" published! 🎉`);
         Router.go('#home');
 
       } catch (err) {
@@ -1143,6 +1476,13 @@ const Views = {
 
     /* ── PDF buttons ── */
     async function loadPdfBlob() {
+      if (lesson.storageMode === 'gdrive') {
+        try {
+          showToast('Fetching notes from Drive…', 'info');
+          const token = await DriveAuth.getValidToken();
+          return await DriveStorage.getBlob(lesson.drivePdfId, token);
+        } catch (e) { showToast('Could not load PDF: ' + e.message, 'error'); return null; }
+      }
       const blob = await VideoDB.get(lesson.pdfId);
       if (!blob) { showToast('PDF not found in storage', 'error'); return null; }
       return blob;
@@ -1166,17 +1506,49 @@ const Views = {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     });
 
-    /* ── Load video from IndexedDB ── */
+    /* ── Load video ── */
     const video     = document.getElementById('main-video');
     const loading   = document.getElementById('player-loading');
     const videoWrap = document.getElementById('player-video-wrap');
 
     try {
-      const blob = await VideoDB.get(lesson.videoId);
-      if (!blob) throw new Error('Video not found in storage. Please re-upload the course.');
-      blobUrl   = URL.createObjectURL(blob);
-      video.src = blobUrl;
-      video.load();
+      if (lesson.storageMode === 'gdrive') {
+        /* ── Google Drive: stream via Service Worker (no full download!) ── */
+        loading.innerHTML = `
+          <div style="text-align:center">
+            <div class="drive-load-icon">☁️</div>
+            <p style="color:var(--text-2);margin:12px 0 6px;font-size:0.9rem">Connecting to Google Drive…</p>
+            <div class="drive-load-bar"><div class="drive-load-fill" style="width:65%"></div></div>
+          </div>`;
+
+        const token = await DriveAuth.getValidToken();
+        const sw    = _swPromise ? await _swPromise : null;
+
+        if (sw) {
+          /* Service Worker is active — send token and stream directly.
+             The browser handles buffering, seeking, and range requests
+             just like any normal video URL. No full download needed. */
+          sw.postMessage({ type: 'DRIVE_TOKEN', fileId: lesson.driveVideoId, token });
+          video.src = `./_drive/${lesson.driveVideoId}`;
+          video.load();
+          /* blobUrl stays null — nothing to revoke on cleanup */
+        } else {
+          /* SW not yet active (first ever page load) — fall back to
+             full blob download. Will stream on next page load. */
+          showToast('First load: downloading video (streaming on next open)', 'info');
+          const blob = await DriveStorage.getBlob(lesson.driveVideoId, token);
+          blobUrl    = URL.createObjectURL(blob);
+          video.src  = blobUrl;
+          video.load();
+        }
+      } else {
+        /* ── Local IndexedDB ── */
+        const blob = await VideoDB.get(lesson.videoId);
+        if (!blob) throw new Error('Video not found in storage. Please re-upload the course.');
+        blobUrl   = URL.createObjectURL(blob);
+        video.src = blobUrl;
+        video.load();
+      }
     } catch (err) {
       loading.innerHTML = `<div style="text-align:center;padding:24px;max-width:340px">
         <p style="color:var(--danger);font-size:1.1rem;margin-bottom:10px">⚠️ Could not load video</p>
@@ -1886,7 +2258,30 @@ const Views = {
 /* ============================================================
    6. INIT
    ============================================================ */
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   VideoDB.get('__warmup__').catch(() => {});
   Router.init();
+  updateDriveNavBadge();
+
+  /* —— Pull latest course list from Drive on startup ——
+     This is what makes it cross-device:
+     upload on laptop → courses.json saved to Drive →
+     open on phone    → courses.json loaded here      */
+  if (DriveAuth.isConnected()) {
+    try {
+      const tok     = await DriveAuth.getValidToken();
+      const courses = await DriveMeta.load(tok);
+      if (courses && Array.isArray(courses)) {
+        localStorage.setItem('ch_courses', JSON.stringify(courses));
+        // Re-render if we're on the home page
+        const page = (window.location.hash || '#home').replace('#','').split('?')[0];
+        if (page === 'home' || page === '') {
+          const main = document.getElementById('main-content');
+          if (main) Views.home(main);
+        }
+      }
+    } catch (e) {
+      console.warn('[DriveMeta] load failed:', e);
+    }
+  }
 });

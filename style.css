@@ -1847,3 +1847,284 @@ img { display: block; max-width: 100%; }
   .section { padding: 0 16px 40px; }
   .history-thumb-wrap { width: 90px; height: 52px; }
 }
+
+/* ================================================================
+   GOOGLE DRIVE UI
+   ================================================================ */
+
+/* ── Navbar Drive button ────────────────────────────────────────── */
+.nav-drive-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.nav-drive-btn:hover {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.2);
+}
+.drive-dot {
+  position: absolute;
+  bottom: 1px;
+  right: 1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-3);
+  border: 2px solid var(--bg-1);
+  transition: background 0.3s;
+}
+.drive-dot.drive-dot-on {
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(16,185,129,0.6);
+}
+
+/* ── Drive Settings Modal ──────────────────────────────────────── */
+.drive-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+.drive-modal-overlay.drive-modal-visible { opacity: 1; }
+.drive-modal-overlay.hidden { display: none; }
+
+.drive-modal-box {
+  background: #141428;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 18px;
+  padding: 28px;
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
+  transform: translateY(20px);
+  transition: transform 0.25s;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+}
+.drive-modal-visible .drive-modal-box { transform: translateY(0); }
+
+.drive-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+.drive-modal-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.drive-modal-close {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-2);
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.drive-modal-close:hover { background: rgba(239,68,68,0.2); color: var(--danger); }
+
+.drive-connected-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16,185,129,0.12);
+  border: 1px solid rgba(16,185,129,0.25);
+  border-radius: 50px;
+  padding: 6px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #6ee7b7;
+  margin-bottom: 14px;
+}
+.drive-ok-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 6px rgba(16,185,129,0.7);
+}
+
+.drive-info-text {
+  font-size: 0.875rem;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+.drive-modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+/* ── Setup steps ────────────────────────────────────────────────── */
+.drive-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.drive-step {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.drive-step-num {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(124,58,237,0.2);
+  border: 1px solid rgba(124,58,237,0.35);
+  color: var(--primary-lt);
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.drive-step-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-bottom: 4px;
+}
+.drive-step-body {
+  font-size: 0.8rem;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.drive-step-body code {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: var(--accent);
+  display: inline-block;
+  margin: 4px 0;
+}
+.drive-link {
+  color: var(--primary-lt);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.drive-input-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.drive-client-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-1);
+  font-size: 0.82rem;
+  padding: 10px 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  font-family: monospace;
+}
+.drive-client-input:focus { border-color: var(--primary); }
+.drive-client-input::placeholder { color: var(--text-3); }
+
+.drive-input-hint {
+  font-size: 0.8rem;
+  margin-top: 10px;
+  min-height: 20px;
+  line-height: 1.5;
+}
+
+/* ── Drive active/inactive banner in upload page ────────────────── */
+.drive-active-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: rgba(16,185,129,0.07);
+  border: 1px solid rgba(16,185,129,0.22);
+  border-radius: var(--radius-sm);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.drive-active-icon {
+  width: 42px; height: 42px;
+  border-radius: 10px;
+  background: rgba(16,185,129,0.1);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.drive-active-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #6ee7b7;
+  margin-bottom: 2px;
+}
+.drive-active-sub {
+  font-size: 0.78rem;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+.drive-active-banner > div { flex: 1; min-width: 0; }
+.drive-inactive-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 20px;
+  font-size: 0.82rem;
+  color: var(--text-3);
+  flex-wrap: wrap;
+}
+
+/* ── Drive loading bar in player ────────────────────────────────── */
+.drive-load-icon { font-size: 2.5rem; margin-bottom: 4px; }
+.drive-load-bar {
+  width: 200px;
+  height: 4px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+  margin: 10px auto 0;
+  overflow: hidden;
+}
+.drive-load-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  border-radius: 2px;
+  transition: width 0.4s ease;
+  animation: driveLoadPulse 1.5s ease-in-out infinite;
+}
+@keyframes driveLoadPulse {
+  0%,100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
